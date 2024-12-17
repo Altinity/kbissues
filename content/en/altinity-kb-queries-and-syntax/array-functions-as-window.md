@@ -6,9 +6,12 @@ description: >-
      Using array functions to mimic window-functions alike behavior.
 ---
 
-There are some usecases when you may want to mimic window functions using Arrays - as an optimization step, or to control the memory better / use on-disk spiling, or just if you have old ClickHouse® version.
+There are cases where you may need to mimic window functions using arrays in ClickHouse. This could be for optimization purposes, to better manage memory, or to enable on-disk spilling, especially if you’re working with an older version of ClickHouse that doesn't natively support window functions.
 
-## Running difference sample
+Here’s an example demonstrating how to mimic a window function like runningDifference() using arrays:
+
+#### Step 1: Create Sample Data
+We’ll start by creating a test table with some sample data:
 
 ```sql
 DROP TABLE IS EXISTS test_running_difference
@@ -22,10 +25,8 @@ SELECT
 FROM numbers(100)
 
 
-SELECT * FROM test_running_difference
-```
+SELECT * FROM test_running_difference;
 
-```text
 ┌─id─┬──────────────────ts─┬────val─┐
 │  0 │ 2010-01-01 00:00:00 │  -1209 │
 │  1 │ 2010-01-01 00:00:00 │     43 │
@@ -132,13 +133,15 @@ SELECT * FROM test_running_difference
 100 rows in set. Elapsed: 0.003 sec. 
 
 ```
+This table contains IDs, timestamps (ts), and values (val), where each id appears multiple times with different timestamps.
 
-runningDifference works only in blocks & require ordered data & problematic when group changes
+#### Step 2: Running Difference Example
+If you try using runningDifference directly, it works block by block, which can be problematic when the data needs to be ordered or when group changes occur.
+
+
 ```sql 
 select id, val, runningDifference(val) from (select * from test_running_difference order by id, ts);
-```
 
-```
 ┌─id─┬────val─┬─runningDifference(val)─┐
 │  0 │  -1209 │                      0 │
 │  0 │  66839 │                  68048 │
@@ -246,13 +249,15 @@ select id, val, runningDifference(val) from (select * from test_running_differen
 ```
 
 
-## Arrays !
+The output may look inconsistent because runningDifference requires ordered data within blocks.
 
-### 1. Group & Collect the data into array 
+#### Step 3: Using Arrays for Grouping and Calculation
+Instead of using runningDifference, we can utilize arrays to group data, sort it, and apply similar logic more efficiently.
 
+**Grouping Data into Arrays** -
+You can group multiple columns into arrays by using the groupArray function. For example, to collect several columns as arrays of tuples, you can use the following query:
 
-you can collect several column by building array of tuples:
-```
+```sql
 SELECT 
     id, 
     groupArray(tuple(ts, val))
@@ -283,10 +288,9 @@ GROUP BY id
 └────┴─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Do needed ordering in each array
-
-For example - by second element of tuple:
-```
+**Sorting Arrays** -
+To sort the arrays by a specific element, for example, by the second element of the tuple, you can use the arraySort function:
+```sql
 SELECT 
     id, 
     arraySort(x -> (x.2), groupArray((ts, val)))
@@ -319,9 +323,11 @@ GROUP BY id
 20 rows in set. Elapsed: 0.004 sec. 
 ```
 
-That can be rewritten like this:
+This sorts each array by the val (second element of the tuple) for each id.
 
-```
+Simplified Sorting Example - We can rewrite the query in a more concise way using WITH clauses for better readability:
+
+```sql
 WITH 
     groupArray(tuple(ts, val)) as window_rows,
     arraySort(x -> x.1, window_rows) as sorted_window_rows
@@ -332,9 +338,10 @@ FROM test_running_difference
 GROUP BY id
 ```
 
-### Apply needed logic arrayMap / arrayDifference etc
+**Applying Calculations with Arrays** -
+Once the data is sorted, you can apply array functions like arrayMap and arrayDifference to calculate differences between values in the arrays:
 
-```
+```sql
 WITH 
     groupArray(tuple(ts, val)) as window_rows,
     arraySort(x -> x.1, window_rows) as sorted_window_rows,
@@ -345,10 +352,7 @@ SELECT
     sorted_window_rows_val_column_diff
 FROM test_running_difference
 GROUP BY id
-```
 
-
-```
 ┌─id─┬─sorted_window_rows_val_column_diff─┐
 │  0 │ [0,68048,68243,72389,67860]        │
 │  1 │ [0,19397,17905,16978,18345]        │
@@ -378,10 +382,8 @@ GROUP BY id
 You can do also a lot of magic with arrayEnumerate and accessing different values by their ids.
 
 
-### Now you can return you arrays back to rows
-
-
-use arrayJoin
+**Reverting Arrays Back to Rows** -
+You can convert the arrays back into rows using arrayJoin:
 
 ```sql
 WITH 
@@ -396,9 +398,7 @@ SELECT
 FROM test_running_difference
 GROUP BY id
 ```
-
-
- or ARRAY JOIN 
+Or use ARRAY JOIN to join the arrays back to the original structure:
  
 ```sql
 SELECT 
@@ -419,8 +419,6 @@ FROM test_running_difference
 GROUP BY id
 ) as t1
 ARRAY JOIN sorted_window_rows_val_column_diff as diff, sorted_window_rows_ts_column as ts
-
 ```
  
- 
-etc.
+This allows you to manipulate and analyze data within arrays effectively, using powerful functions such as arrayMap, arrayDifference, and arrayEnumerate.
